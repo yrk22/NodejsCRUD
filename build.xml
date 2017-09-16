@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<project name="Tutorial Demo" default="build" basedir=".">
+<project name="VideoDownloadGenerator" default="build" basedir=".">
   <description>The Demo project for Tutorial</description>
   <property name="debug" value="true" overwrite="false" />
 
@@ -34,7 +34,7 @@
       <arg line="/t:build" />
       <arg line="/p:Configuration=Release" />
       <arg line="/p:VisualStudioVersion=14.0" />
-      <arg line="tutorial.sln" />
+      <arg line="VideoDownloadGenerator.sln" />
     </exec>
   </target>
 
