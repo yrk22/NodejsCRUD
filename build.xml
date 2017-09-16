@@ -1,0 +1,48 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<project name="Tutorial Demo" default="build" basedir=".">
+  <description>The Demo project for Tutorial</description>
+  <property name="debug" value="true" overwrite="false" />
+
+  <property name="output.dir" value=".\output" />
+
+  <property name="mstest.exe" value="C:\Program Files (x86)\Microsoft Visual Studio 14.0\Common7\IDE\MSTest.exe" />
+
+  <!--<property name="dotcover.exe" value="D:\TeamCity\buildAgent\tools\dotCover\dotcover.exe" />-->
+  
+  <property name="msbuild.exe" value="C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe" />
+  
+  <property name="nuget.exe" value="D:\tools\nuget.exe" />
+
+  <target name="init" depends="clean">
+    <mkdir dir="${output.dir}" />
+  </target>
+  
+  <target name="clean" description="remove all generated files">
+    <delete dir="${output.dir}" />
+  </target>
+
+  <target name="nuget" >
+    <exec program="${nuget.exe}" verbose="true" failonerror="true">
+      <arg line="restore" />
+      <arg line="." />
+    </exec>
+  </target>
+  
+  <target name="build" description="compiles the source code" depends="init,nuget">
+    <exec program="${msbuild.exe}" verbose="true" failonerror="true">
+      <arg line="/m" />
+      <arg line="/t:build" />
+      <arg line="/p:Configuration=Release" />
+      <arg line="/p:VisualStudioVersion=14.0" />
+      <arg line="tutorial.sln" />
+    </exec>
+  </target>
+
+  <!--<target name="coverage" description="Use JebBrain's DotCover to generate coverage report">
+    Run tests and generated dotcover snapshots
+    <exec program="${dotcover.exe}" verbose="true" failonerror="true">
+      <arg line="analyse" />
+      <arg line="dotcover.xml" />
+    </exec>
+  </target>-->
+</project>
