@@ -212,7 +212,7 @@ namespace HotelAPI.GB.Controllers
         }
 
         /// <summary>
-        /// This method is used for getting Roombooked 
+        /// This method is used for getting Roombooked
         /// </summary>
         /// <param name="ReservationId"></param>
         /// <returns>Models.Roombooked</returns>
@@ -220,7 +220,6 @@ namespace HotelAPI.GB.Controllers
         [Route("roombooked/info/{ReservationId}")]
         public Models.Roombooked GetRoomBooked(int ReservationId)
         {
-
             Models.Roombooked roomsbooked = new Models.Roombooked();
             LittleChapel.ReservedRoom roombooked = hdc.ReservedRooms.Where(x => x.ReservationId == ReservationId).FirstOrDefault();
             roomsbooked.ReservationId = roombooked.ReservationId;
@@ -313,18 +312,159 @@ namespace HotelAPI.GB.Controllers
                 return 0;
             }
         }
-
+        /// <summary>
+        /// Filling Data of GuestDetails for PastBooking
+        /// </summary>
+        /// <param name="EventID"></param>
+        /// <param name="GuestAccID"></param>
+        /// <returns></returns>
+        [HttpGet]
+        [Route("BookingListEvents/{EventID}/{GuestAccID}")]
+        public HttpResponseMessage GuestDetailsByEventIds(int EventID, int GuestAccID)
+        {
+            GBPastBooking pastbooking = new GBPastBooking();
+            List<GBPastBooking> objPast = new List<GBPastBooking>();
+            try
+            {
+                List<LittleChapel.Reservation> reservation = null;
+                var Contracts = hdc.Contracts.Where(x => x.EventID == EventID && x.Status == "Contracted" && (x.Deleted == false && x.Deleted != null)).ToList();
+                pastbooking.Contracts = new List<Models.ContractModel>();
+                for (int intI = 0; intI < Contracts.Count(); intI++)
+                {
+                    ContractModel contractmodel = new ContractModel();
+                    contractmodel.Contractid = Contracts[intI].ContractId;
+                    var GuestAccount = hdc.GuestAccounts.Where(x => x.GuestAccId == GuestAccID && x.Deleted == false).FirstOrDefault();
+                    var ListOfGuestAccounts = hdc.GuestAccounts.Where(x => x.Email == GuestAccount.Email).ToList();
+                    contractmodel.Reservation = new List<Reservations>();
+                    for (int GuestAccIDs = 0; GuestAccIDs < ListOfGuestAccounts.Count(); GuestAccIDs++)
+                    {
+                        if (ListOfGuestAccounts[GuestAccIDs].GuestAccId > 0)
+                        {
+                            reservation = hdc.Reservations.Where(x => x.CreatedBy == Convert.ToString(ListOfGuestAccounts[GuestAccIDs].GuestAccId) && x.ContractId == Contracts[intI].ContractId && (x.Status == "CONFIRMED") && (x.Deleted == false)).ToList();
+                        }
+                        for (int reserve = 0; reserve < reservation.Count(); reserve++)
+                        {
+                            FillDataofContractModel(reservation, reserve, ref contractmodel);
+                        }
+                    }
+                    if (contractmodel.Reservation != null && contractmodel.Reservation.Count() > 0)
+                    {
+                        pastbooking.Contracts.Add(contractmodel);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                CatchMessage(ex);
+            }
+            return Request.CreateResponse(HttpStatusCode.OK, pastbooking);
+        }
+        /// <summary>
+        /// Filling Data into Contract Model
+        /// </summary>
+        /// <param name="reservations"></param>
+        /// <param name="reserve"></param>
+        /// <param name="contractmodel"></param>
+        public void FillDataofContractModel(List<LittleChapel.Reservation> reservations, int reserve, ref ContractModel contractmodel)
+        {
+            try
+            {
+                Models.Reservations reservation = new Models.Reservations();
+                reservation.ReservationID = reservations[reserve].ReservationId;
+                reservation.TotalPrice = reservations[reserve].TotalPrice;
+                var salesorder = wms.SalesOrders.Where(x => x.SalesOrderID == reservations[reserve].LinkedSalesOrderId).Select(x => x.CreateDate).FirstOrDefault();
+                reservation.CreatedDate = Convert.ToDateTime(salesorder).ToString("MM/dd/yyyy");
+                var contract = hdc.Contracts.Where(x => x.ContractId == reservations[reserve].ContractId).FirstOrDefault();
+                var resort = hdc.Resorts.Where(x => x.ResortId == contract.ResortId).FirstOrDefault();
+                reservation.ResortDesignation = resort.Resort_Designation__c;
+                var LinkedSalesOrderIDList = hdc.SplitReservations.Where(c => c.ReservationId == reservation.ReservationID).Select(d => d.LinkedSalesOrderId).ToList();
+                LinkedSalesOrderIDList.Add(reservations[reserve].LinkedSalesOrderId);
+                var paymentdetail = wms.Payments.Where(x => LinkedSalesOrderIDList.Contains(x.SalesOrderID)).
+                    Select(x => new Payed
+                    {
+                        PaymentID = x.PaymentID,
+                        PaymentDate = x.PayDate,
+                        Amount = x.Amount,
+                        CardType = Enum.GetName(typeof(PaymentType), x.PayType),
+                        PayType = x.Notes.Replace("(MES)", String.Empty),
+                        Status = Enum.GetName(typeof(PaymentStatus), x.PaymentStatus),
+                        TrailingCardNumbers = x.CardNumberMasked.Substring(x.CardNumberMasked.Length - 4, 4),
+                        Fee = x.Fee,
+                        BaseAmount = x.BaseAmount
+                    }).ToList();
+                reservation.Pay = paymentdetail;
+                var roomcat = hdc.ReservedRooms.Where(x => x.ReservationId == reservations[reserve].ReservationId && (x.Deleted == false || x.Deleted == null)).GroupBy(x => x.RoomCategoryId).Select(x => x.Key).ToList();
+                if (roomcat.Count() > 0)
+                {
+                    reservation.RoomCategory = new List<Models.RoomCategory>();
+                    for (int roomcategory = 0; roomcategory < roomcat.Count(); roomcategory++)
+                    {
+                        Models.RoomCategory RoomCategory = new Models.RoomCategory();
+                        RoomCategory.RoomCategoryId = roomcat[roomcategory].Value;
+                        var roomcatname = hdc.RoomCategories.Where(x => x.RoomCategoryId == roomcat[roomcategory].Value).Select(x => new { x.RoomCategoryId, x.Name, x.RoomDesignation }).FirstOrDefault();
+                        RoomCategory.Name = roomcatname.Name;
+                        RoomCategory.RoomDesignation = roomcatname.RoomDesignation;
+                        RoomCategory.RoomCategoryId = roomcatname.RoomCategoryId;
+                        var rooms = hdc.ReservedRooms.Where(x => x.ReservationId == reservations[reserve].ReservationId && (x.Deleted == false || x.Deleted == null) && x.RoomCategoryId == RoomCategory.RoomCategoryId).GroupBy(x => x.RoomBookedId).Select(x => x.Key).ToList();
+                        RoomCategory.Rooms = new List<Room>();
+                        for (int RoomsBooked = 0; RoomsBooked < rooms.Count(); RoomsBooked++)
+                        {
+                            var reservedroom = hdc.ReservedRooms.Where(x => x.RoomBookedId == rooms[RoomsBooked]).FirstOrDefault();
+                            Room room = new Room();
+                            room.RoomBookedId = reservedroom.RoomBookedId;
+                            room.RoomDescription = reservedroom.Notes;
+                            room.StartDate = reservedroom.StartDate;
+                            room.EndDate = reservedroom.EndDate;
+                            room.NoofNights = Convert.ToDecimal((reservedroom.EndDate - reservedroom.StartDate).TotalDays);
+                            room.RoomDesignation = roomcatname.RoomDesignation;
+                            var gd = hdc.GuestDetails.Where(x => x.RoomBookedId == room.RoomBookedId && x.ReservationId == reservation.ReservationID && (x.Deleted == false || x.Deleted == null)).ToList();
+                            room.GuestDetails = new List<Models.GuestID>();
+                            for (int GuestDetails = 0; GuestDetails < gd.Count(); GuestDetails++)
+                            {
+                                Models.GuestID guestdetails = new Models.GuestID();
+                                guestdetails.GuestId = gd[GuestDetails].GuestId;
+                                guestdetails.FirstName = gd[GuestDetails].FirstName;
+                                guestdetails.LastName = gd[GuestDetails].LastName;
+                                guestdetails.Age = gd[GuestDetails].Age;
+                                guestdetails.IsChild = gd[GuestDetails].IsChild;
+                                guestdetails.GuestPrice = gd[GuestDetails].Price;
+                                guestdetails.InsurancePrice = gd[GuestDetails].InsurancePrice;
+                                guestdetails.GuestEmail = gd[GuestDetails].Email;
+                                room.GuestDetails.Add(guestdetails);
+                            }
+                            RoomCategory.Rooms.Add(room);
+                        }
+                        reservation.RoomCategory.Add(RoomCategory);
+                    }
+                }
+                else
+                {
+                    contractmodel.ErrorMessage = "No RoomCategory Found.";
+                }
+                contractmodel.Reservation.Add(reservation);
+            }
+            catch (Exception ex)
+            {
+                CatchMessage(ex);
+            }
+        }
+        /// <summary>
+        /// Fetching Reservations for a particular contract
+        /// /// </summary>
+        /// <param name="ContractID"></param>
+        /// <param name="GuestAccID"></param>
+        /// <returns></returns>
         [HttpGet]
         [Route("BookingList/{ContractID}/{GuestAccID}")]
         public HttpResponseMessage GuestDetailsByIds(int ContractID, int GuestAccID)
         {
             try
             {
-                PastBook pastbooking = new PastBook();
+                GBPastBooking pastbooking = new GBPastBooking();
                 LittleChapel.GuestAccount guestaccreservation = null;
                 if (ContractID > 0 && GuestAccID > 0)
                 {
-                    guestaccreservation = hdc.GuestAccounts.Where(x => x.GuestAccId == GuestAccID && x.ContractId == ContractID && x.Deleted == false).FirstOrDefault();
+                    guestaccreservation = hdc.GuestAccounts.Where(x => x.GuestAccId == GuestAccID && x.Deleted == false).FirstOrDefault();
                 }
                 else if (ContractID > 0)
                 {
@@ -335,7 +475,7 @@ namespace HotelAPI.GB.Controllers
                     List<LittleChapel.Reservation> reservation = null;
                     if (GuestAccID > 0)
                     {
-                        reservation = hdc.Reservations.Where(x => x.CreatedBy == Convert.ToString(guestaccreservation.GuestAccId) && (x.Status == "CONFIRMED" || x.Status == "CANCELLED" || x.Status == "FAILED") && x.Deleted == false).ToList();
+                        reservation = hdc.Reservations.Where(x => x.CreatedBy == Convert.ToString(guestaccreservation.GuestAccId) && x.ContractId == ContractID && (x.Status == "CONFIRMED" || x.Status == "CANCELLED" || x.Status == "FAILED") && x.Deleted == false).ToList();
                     }
                     else
                     {
@@ -366,7 +506,7 @@ namespace HotelAPI.GB.Controllers
                                 BaseAmount = x.BaseAmount
                             }).ToList();
                         re.Pay = paymentdetail;
-                        var roomcat = hdc.ReservedRooms.Where(x => x.ReservationId == reservation[reserve].ReservationId).GroupBy(x => x.RoomCategoryId).Select(x => x.Key).ToList();
+                        var roomcat = hdc.ReservedRooms.Where(x => x.ReservationId == reservation[reserve].ReservationId && (x.Deleted == false || x.Deleted == null)).GroupBy(x => x.RoomCategoryId).Select(x => x.Key).ToList();
                         if (roomcat.Count() > 0)
                         {
                             re.RoomCategory = new List<Models.RoomCategory>();
@@ -378,7 +518,7 @@ namespace HotelAPI.GB.Controllers
                                 roomct.Name = roomcatname.Name;
                                 roomct.RoomDesignation = roomcatname.RoomDesignation;
                                 roomct.RoomCategoryId = roomcatname.RoomCategoryId;
-                                var rooms = hdc.ReservedRooms.Where(x => x.ReservationId == reservation[reserve].ReservationId && x.RoomCategoryId == roomct.RoomCategoryId).GroupBy(x => x.RoomBookedId).Select(x => x.Key).ToList();
+                                var rooms = hdc.ReservedRooms.Where(x => x.ReservationId == reservation[reserve].ReservationId && (x.Deleted == false || x.Deleted == null) && x.RoomCategoryId == roomct.RoomCategoryId).GroupBy(x => x.RoomBookedId).Select(x => x.Key).ToList();
                                 roomct.Rooms = new List<Room>();
                                 for (int RoomsBooked = 0; RoomsBooked < rooms.Count(); RoomsBooked++)
                                 {
@@ -390,7 +530,7 @@ namespace HotelAPI.GB.Controllers
                                     rom.EndDate = rb.EndDate;
                                     rom.NoofNights = Convert.ToDecimal((rb.EndDate - rb.StartDate).TotalDays);
                                     rom.RoomDesignation = roomcatname.RoomDesignation;
-                                    var gd = hdc.GuestDetails.Where(x => x.RoomBookedId == rom.RoomBookedId && x.ReservationId == re.ReservationID).ToList();
+                                    var gd = hdc.GuestDetails.Where(x => x.RoomBookedId == rom.RoomBookedId && x.ReservationId == re.ReservationID && (x.Deleted == false || x.Deleted == null)).ToList();
                                     rom.GuestDetails = new List<Models.GuestID>();
                                     for (int GuestDetails = 0; GuestDetails < gd.Count(); GuestDetails++)
                                     {
@@ -427,6 +567,36 @@ namespace HotelAPI.GB.Controllers
 
 
         /// <summary>
+        /// Method to update guest email and sugarCRMId
+        /// </summary>
+        /// <param name="guestEmail"></param>
+        /// <returns></returns>
+        [Route("GuestEmail")]
+        [HttpPost]
+        public HttpResponseMessage GuestEmail(ReservationGuestEmail guestEmail)
+        {
+            try
+            {
+                var guestToUpdate = hdc.GuestDetails.Where(c => c.GuestId == guestEmail.reservationGuestId).FirstOrDefault();
+                if (guestToUpdate == null)
+                {
+                    return Request.CreateResponse(HttpStatusCode.BadRequest, "Please check guestID");
+                }
+                guestToUpdate.Email = guestEmail.reservationGuestEmail;
+                guestToUpdate.SugarCRMId = guestEmail.sugarCRMId;
+                hdc.SubmitChanges();
+                return Request.CreateResponse(HttpStatusCode.OK);
+            }
+            catch (Exception ex)
+            {
+                Log4net.Error(ex.Message);
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, "An unknown error has occurred.");
+            }
+
+        }
+
+
+        /// <summary>
         /// This method is for sending Emails
         /// </summary>
         /// <param name="e"></param>
@@ -436,6 +606,7 @@ namespace HotelAPI.GB.Controllers
             Log4net.Info("\n\tSending Error Mail.");
             Email email = new Email();
             email.To = "exceptions@everafter.com";
+            email.From = "info@littlechapel.com";
             email.Subject = "Exception in " + ControllerName;
             email.Body = "\nError Message" + e.Message + "\nStackTrace" + e.StackTrace;
             if (!email.Send())
@@ -468,6 +639,7 @@ namespace HotelAPI.GB.Controllers
                 roomsbooked.EndDate = roombooked.EndDate;
                 roomsbooked.CompanyId = roombooked.CompanyId;
                 roomsbooked.CreatedBy = roombooked.CreatedBy;
+                roomsbooked.RFQRoomInfoId = roombooked.RoomInfoID;
                 roomsbooked.CreatedDate = DateTime.Now;
                 roomsbooked.Deleted = false;
                 roomsbooked.Notes = roombooked.Notes;
@@ -684,12 +856,16 @@ namespace HotelAPI.GB.Controllers
                     var Filtered = durationwsq.DurationPrices.Where(c => c.Deleted == false || c.Deleted == null).ToList();
                     if (Filtered.Count > 0)
                     {
-                        LittleChapel.RoomInventory roomInventory = hdc.RoomInventories.Where(x => x.ContractId == searchRequest.ContractID && x.RoomCategoryId == durationwsq.RoomCategory.RoomCategoryId && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
+                        LittleChapel.RoomInventory roomInventory = hdc.RoomInventories.Where(x => x.ContractId == searchRequest.ContractID && x.RFQRoomInfoId == durationwsq.RFQRoomInfoId && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
                         foreach (var filter in Filtered)
                         {
                             searchModel = new SearchModel();
                             searchModel.ChildPrices = new List<ChildPrices>();
-                            searchModel.RoomCategoryId = durationwsq.RoomCategory.RoomCategoryId;
+                            var rfqroom = durationwsq.Contract.RFQRoomInfos.Where(c => c.RoomInfoId == durationwsq.RFQRoomInfoId && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
+                            searchModel.RoomCategoryId = Convert.ToInt16(rfqroom.RoomCategoryId);
+                            searchModel.RoomInfoID = rfqroom.RoomInfoId;
+                            searchModel.isPrivate = (rfqroom == null || rfqroom.IsPrivate == null) ? false : Convert.ToBoolean(rfqroom.IsPrivate);
+                            searchModel.isPrivateEmail = (rfqroom == null || rfqroom.IsPrivate == null) || rfqroom.IsPrivate == false ? null : rfqroom.GuestEmail;
                             searchModel.RoomCategoryName = durationwsq.RoomCategory.Name;
                             searchModel.RoomDescription = durationwsq.RoomCategory.RoomDescription;
                             searchModel.RoomDesignation = durationwsq.RoomCategory.RoomDesignation;
@@ -697,29 +873,22 @@ namespace HotelAPI.GB.Controllers
                             searchModel.MaximumOccupants = durationwsq.MaximumOccupancy;
                             searchModel.MaximumAdults = durationwsq.MaximumAdults;
                             searchModel.MaximumChildren = durationwsq.MaximumChildren;
-
                             searchModel.RemainingRooms = roomInventory.TotalRooms - (roomInventory.TotalSold + roomInventory.TotalHeld);
                             var rates = filter.WSQRoomRates;
                             decimal totalAdultPrice = 0;
                             decimal totalChildPrice = 0;
                             decimal ChildPrice = 0;
                             decimal addNights = 0;
-
                             var adultRates = rates.Where(c => c.NumberOfAdults == searchRequest.roomRequestCollection[0].adults && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
-
-
                             if (adultRates != null)
                             {
                                 searchModel.AdultBasePrice = adultRates.BasePrice;
-
                                 addNights = Convert.ToDecimal(NoofNights - durationwsq.MinimunNights < 0 ? 0 : NoofNights - durationwsq.MinimunNights);
-
                                 if (addNights > 0)
                                 {
                                     searchModel.AdultBasePrice += adultRates.AdditionalNightPrice * addNights;
                                 }
                                 totalAdultPrice = Convert.ToDecimal((adultRates.BasePrice + (addNights * adultRates.AdditionalNightPrice)) * searchRequest.roomRequestCollection[0].adults);
-
                                 foreach (int childage in searchRequest.roomRequestCollection[0].children)
                                 {
                                     ChildPrices childprice = new ChildPrices();
@@ -738,7 +907,6 @@ namespace HotelAPI.GB.Controllers
                                             childprice.ChildBasePrice = childRates.BasePrice;
                                             searchModel.ChildPrices.Add(childprice);
                                         }
-
                                         ChildPrice = Convert.ToDecimal(childRates.BasePrice + (addNights * childRates.AdditionalNightPrice));
                                         totalChildPrice += ChildPrice;
                                     }
@@ -764,6 +932,7 @@ namespace HotelAPI.GB.Controllers
         }
 
 
+
         /// <summary>
         /// This API method is for updating RoomInventory table
         /// </summary>
@@ -776,11 +945,11 @@ namespace HotelAPI.GB.Controllers
             try
             {
                 var reservations = hdc.Reservations.Where(x => x.ReservationId == ReservationID && x.Deleted == false).FirstOrDefault();
-                var roomcat = hdc.ReservedRooms.Where(x => x.ReservationId == reservations.ReservationId && x.Deleted == false).GroupBy(x => x.RoomCategoryId).Select(x => x.Key).ToList();
-                for (int roomCat = 0; roomCat < roomcat.Count(); roomCat++)
+                var roomsBooked = hdc.ReservedRooms.Where(x => x.ReservationId == reservations.ReservationId && (x.Deleted == false || x.Deleted == null)).GroupBy(x => x.RFQRoomInfoId).Select(x => x.Key).ToList();
+                for (int roomBooked = 0; roomBooked < roomsBooked.Count(); roomBooked++)
                 {
-                    var reservedrooms = hdc.ReservedRooms.Where(x => x.ReservationId == ReservationID && x.RoomCategoryId == roomcat[roomCat].Value && x.Deleted == false).Count();
-                    roomInventory = hdc.RoomInventories.Where(x => x.ContractId == reservations.ContractId && x.RoomCategoryId == roomcat[roomCat].Value && x.CompanyId == 3 && x.Deleted == false).FirstOrDefault();
+                    var reservedrooms = hdc.ReservedRooms.Where(x => x.ReservationId == ReservationID && x.RFQRoomInfoId == roomsBooked[roomBooked] && (x.Deleted == false || x.Deleted == null)).Count();
+                    roomInventory = hdc.RoomInventories.Where(x => x.ContractId == reservations.ContractId && x.RFQRoomInfoId == roomsBooked[roomBooked] && x.CompanyId == 3 && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
                     if (roomInventory != null)
                     {
                         if (roomInventories.TotalHold)
@@ -928,6 +1097,8 @@ namespace HotelAPI.GB.Controllers
                 bool FirstPayment = false;
                 int PaymentCardID = Convert.ToInt32(guestpayment.paymentInfo.PaymentCardID);
                 string Token = string.Empty;
+                Customer customer = null;
+
                 try
                 {
                     if (Convert.ToInt32(guestpayment.LinkedSalesOrderID) > 0)
@@ -941,8 +1112,8 @@ namespace HotelAPI.GB.Controllers
                     }
                     if (guestpayment.ReservationId != 0)
                     {
-                        var reservation = hdc.Reservations.Where(x => (x.Status == "ON HOLD" || x.Status == "CONFIRMED") && x.ReservationId == guestpayment.ReservationId && x.Deleted == false).FirstOrDefault();
-                        if (reservation != null)
+                        var Reservation = hdc.Reservations.Where(x => (x.Status == "ON HOLD" || x.Status == "CONFIRMED") && x.ReservationId == guestpayment.ReservationId && x.Deleted == false).FirstOrDefault();
+                        if (Reservation != null)
                         {
                             var ReserveRow = from P in hdc.Reservations.Distinct()
                                              join pi in hdc.Contracts on P.ContractId equals pi.ContractId
@@ -957,95 +1128,62 @@ namespace HotelAPI.GB.Controllers
                                                  TotalPrice = P.TotalPrice,
                                                  ContractID = P.ContractId,
                                                  LinkedSalesOrderID = P.LinkedSalesOrderId
-
                                              };
                             if ((ReserveRow.Single()).LinkedSalesOrderID == null)
                             {
                                 FirstPayment = true;
                             }
-                            var GuestAccount = hdc.GuestAccounts.Where(x => x.GuestAccId == Convert.ToInt32((ReserveRow.Single()).CreatedBy) && x.ContractId == (ReserveRow.Single()).ContractID && x.Deleted == false).FirstOrDefault();
-                            if (GuestAccount == null)
+                            var Contracts = hdc.Contracts.Where(x => x.Status == "Contracted" && x.ContractId == (ReserveRow.Single()).ContractID && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
+                            if (Contracts == null)
                             {
-                                response.Error = "GuestAccount is invalid";
+                                response.Error = "Contract Status is not Contracted or it was not found or was deleted";
                                 return Request.CreateResponse(HttpStatusCode.BadRequest, response);
                             }
-                            var Customer = from cu in wms.Customers
-                                           where cu.Email == GuestAccount.Email
-                                           select new
-                                           {
-                                               CustomerID = cu.CustomerID,
-                                               GuestName = cu.GroomNameFirst + " " + cu.GroomNameLast,
-                                               AddressID = cu.BillingAddressID
-                                           };
-                            if (Customer == null || Customer.Count() == 0)
+                            var EventDetails = hdc.Contracts.Where(x => x.EventID == (ReserveRow.Single()).EventID && x.ContractId == (ReserveRow.Single()).ContractID).FirstOrDefault();
+                            // Occupant is making payment
+                            if (guestpayment.GuestDetailId != 0)
                             {
-                                Log4net.Info("Entered Customer Scope");
-                                Customer customer = new Customer();
-                                customer.BrideNameFirst = string.Empty;
-                                customer.BrideNameLast = string.Empty;
-                                customer.GroomNameFirst = GuestAccount.FirstName;
-                                customer.GroomNameLast = GuestAccount.LastName;
-                                customer.CompanyID = GuestAccount.CompanyId;
-                                customer.CustomerType = 2;
+                                var guestDetail = hdc.GuestDetails.Where(x => x.GuestId == guestpayment.GuestDetailId).FirstOrDefault();
 
-                                //Add Address
-                                Address newAddress = new Address();
-                                newAddress.Street = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingStreet1) ? "" : guestpayment.paymentInfo.BillingStreet1;
-                                newAddress.Street2 = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingStreet2) ? "" : guestpayment.paymentInfo.BillingStreet2;
-                                newAddress.Unit = string.Empty;
-                                newAddress.City = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCity) ? "" : guestpayment.paymentInfo.BillingCity;
-                                newAddress.State = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingState) ? "" : guestpayment.paymentInfo.BillingState;
-                                newAddress.Zip = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingZip) ? "" : guestpayment.paymentInfo.BillingZip;
-                                newAddress.Country = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCountry) ? "" : guestpayment.paymentInfo.BillingCountry;
-                                wms.Addresses.InsertOnSubmit(newAddress);
-                                wms.SubmitChanges();
-                                customer.BillingAddressID = newAddress.AddressID;
-                                customer.ShippingAddressID = newAddress.AddressID;
-                                customer.DayPhone = (string.IsNullOrEmpty(GuestAccount.PhoneNo) ? string.Empty : GuestAccount.PhoneNo);
-                                customer.EvePhone = (string.IsNullOrEmpty(GuestAccount.PhoneNo) ? string.Empty : GuestAccount.PhoneNo);
-                                customer.Fax = string.Empty;
-                                customer.IsEmailOptedOut = false;
-                                customer.ReferralID = 0;
-                                customer.AffiliateID = 0;
-                                customer.AuthUserID = 0;
-                                customer.IsRenewal = false;
-                                if (GuestAccount.Email != "")
+                                // Occupant ID not found in DB, return response as bad request
+                                if (guestDetail == null)
                                 {
-                                    customer.Email = GuestAccount.Email;
+                                    return Request.CreateResponse(HttpStatusCode.BadRequest, "Occupant not found in system");
                                 }
-                                wms.Customers.InsertOnSubmit(customer);
-                                wms.SubmitChanges();
-                                guestpayment.paymentInfo.Payee = GuestAccount.FirstName + " " + GuestAccount.LastName;
-                                guestpayment.paymentInfo.CustomerID = customer.CustomerID;
+                                else
+                                {
+                                    //get or create customer for this occupant
+                                    customer = GetOrCreateCustomerForOccupant(guestDetail, guestpayment);
+
+                                }
                             }
                             else
                             {
-                                guestpayment.paymentInfo.Payee = (Customer.FirstOrDefault()).GuestName;
-                                guestpayment.paymentInfo.CustomerID = (Customer.FirstOrDefault()).CustomerID;
-                                //var Address = wms.Addresses.Where(x => x.AddressID == (Customer.FirstOrDefault()).AddressID).FirstOrDefault();
-                                //Address.Country = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCountry) ? "" : guestpayment.paymentInfo.BillingCountry;
+                                var guestAccount = hdc.GuestAccounts.Where(x => x.GuestAccId == Convert.ToInt32((ReserveRow.Single()).CreatedBy) && x.Deleted == false).FirstOrDefault();
+                                if (guestAccount == null || EventDetails == null)
+                                {
+                                    response.Error = "GuestAccount is invalid";
+                                    return Request.CreateResponse(HttpStatusCode.BadRequest, response);
+                                }
+                                // Owner is making payment
+                                customer = GetOrCreateCustomerForOwner(guestAccount, guestpayment);
                             }
-                            SalesOrder(FirstPayment, (ReserveRow.Single()).LinkedSalesOrderID, ref guestpayment, GuestAccount, (ReserveRow.Single()).TotalPrice, wms, Log4net);
-                            if (FirstPayment)
-                            {
-                                reservation.LinkedSalesOrderId = Convert.ToInt32(guestpayment.LinkedSalesOrderID);
-                                wms.SubmitChanges();
-                            }
-                            var previousReservations = hdc.Reservations.Where(x => x.Status == "CONFIRMED" && x.CreatedBy == Convert.ToString(GuestAccount.GuestAccId) && x.Deleted == false).OrderBy(x => x.CreatedDate).FirstOrDefault();
-                            guestpayment.paymentInfo.PreviousBookDate = previousReservations == null ? DateTime.Now : previousReservations.CreatedDate;
+
+                            guestpayment.paymentInfo.ContractCreatedDate = Contracts.CreatedDate;
+                            SalesOrder(FirstPayment, guestpayment.ReservationId,(ReserveRow.Single()).LinkedSalesOrderID, guestpayment, (ReserveRow.Single()).TotalPrice, wms,hdc, Log4net);
                             int PlanID = 0;
-                            if (ReserveRow != null && Customer != null && (ReserveRow.Single()).PlanID != 0)
+                            if (ReserveRow != null && customer != null && (ReserveRow.Single()).PlanID != 0)
                             {
                                 if (int.TryParse(Convert.ToString((ReserveRow.Single()).PlanID), out PlanID))
                                 {
                                     Log4net.Info("Guest Pay PlanID:" + (ReserveRow.Single()).PlanID);
                                     guestpayment.paymentInfo.PlanID = PlanID;
                                     Log4net.Info("Processing payment.");
-                                    response = PaymentOps.ProcessPayment(guestpayment, (ReserveRow.Single()).ReservationDate, (ReserveRow.Single()).ContractID, (ReserveRow.Single()).LinkedSalesOrderID, (ReserveRow.Single()).TotalPrice, ref PaymentCardID, ref Token, GuestAccount, ref FirstPayment, wms, hdc, Log4net);
+                                    response = PaymentOps.ProcessPayment(guestpayment, (ReserveRow.Single()).ReservationDate, (ReserveRow.Single()).ContractID, (ReserveRow.Single()).LinkedSalesOrderID, (ReserveRow.Single()).TotalPrice, ref PaymentCardID, ref Token, wms, hdc, Log4net);
                                     if (response.PaymentID != 0 && response.SalesOrderID != 0 && response.SalesOrderID != null)
                                     {
                                         Log4net.Info("Room Inventory Entry.");
-                                        var EventDateTime = hdc.EventDetails.Where(X => X.EventID == (ReserveRow.Single()).EventID).FirstOrDefault();
+                                        var EventDateTime = hdc.EventDetails.Where(X => X.EventID == (ReserveRow.Single()).EventID && (X.Deleted == false || X.Deleted == null)).FirstOrDefault();
                                         DateTime dateTime = Convert.ToDateTime(EventDateTime.PaymentDueDate);
                                         if (FirstPayment)
                                         {
@@ -1063,7 +1201,7 @@ namespace HotelAPI.GB.Controllers
                                         try
                                         {
                                             EmailUtilities eu = new EmailUtilities();
-                                            eu.CreatePaymentReciept(Convert.ToInt32(response.SalesOrderID), guestpayment.GuestID);
+                                            eu.CreatePaymentReciept(Convert.ToInt32(response.SalesOrderID), guestpayment.GuestID, null);
                                         }
                                         catch (Exception)
                                         {
@@ -1112,33 +1250,380 @@ namespace HotelAPI.GB.Controllers
                 return ValidationResponse;
             }
         }
-        public static void SalesOrder(bool FirstPayment, int? LinkedSalesOrderID, ref Models.GuestPayment guestpayment, GuestAccount guestAccount, decimal TotalPrice, WMS wms, ILog Log4net)
+        public static int? SalesOrder(bool FirstPayment,int ReservationID,int? LinkedSalesOrderID, Models.GuestPayment guestpayment, decimal TotalPrice, WMS wms,HotelsDataContext hdc ,ILog Log4net)
         {
             if (FirstPayment)
             {
-                LittleChapel.SalesOrder salesOrder = PaymentOps.ConvertToSalesOrder(guestpayment.paymentInfo, TotalPrice);
-                salesOrder.CustomerID = guestpayment.paymentInfo.CustomerID;
-                wms.SalesOrders.InsertOnSubmit(salesOrder);
+                LittleChapel.SalesOrder so = PaymentOps.ConvertToSalesOrder(guestpayment.paymentInfo, TotalPrice);
+                so.CustomerID = guestpayment.paymentInfo.CustomerID;
+                wms.SalesOrders.InsertOnSubmit(so);
                 wms.SubmitChanges();
-                Log4net.Info("SalesOrder ID:" + salesOrder.SalesOrderID);
-                guestpayment.LinkedSalesOrderID = Convert.ToString(salesOrder.SalesOrderID);
+                LittleChapel.Reservation reservation = hdc.Reservations.Where(x => x.ReservationId == ReservationID).FirstOrDefault();
+                reservation.LinkedSalesOrderId = so.SalesOrderID;
+                wms.SubmitChanges();
+                return so.SalesOrderID;
             }
             else
             {
-                LittleChapel.SalesOrder salesOrder = wms.SalesOrders.Where(x => x.SalesOrderID == LinkedSalesOrderID).FirstOrDefault();
-                if (salesOrder != null)
+                LittleChapel.Reservation reservation = hdc.Reservations.Where(x => x.LinkedSalesOrderId == LinkedSalesOrderID && x.CompanyId==3).FirstOrDefault();
+                if (reservation != null)
                 {
-                    //salesOrder.TotalPaidNew = guestpayment.paymentInfo.Amount;
-                    Log4net.Info("SalesOrder ID:" + LinkedSalesOrderID);
-                    guestpayment.LinkedSalesOrderID = Convert.ToString(LinkedSalesOrderID);
+                    Log4net.Info("SalesOrder ID:" + reservation.LinkedSalesOrderId);
                 }
+                return reservation.LinkedSalesOrderId;
+            }
+        }
+        [HttpPut]
+        [Route("splitPay")]
+        public HttpResponseMessage splitPay(SplitPayModel guestpayment)
+        {
+            HttpResponseMessage ValidationResponse = Check(guestpayment.CreatedBy, guestpayment.CompanyID, guestpayment.Valid);
+            HttpResponseMessage paymentSchedule = null;
+            try
+            {
+                if (ValidationResponse.IsSuccessStatusCode)
+                {
+                    int ReservationID = guestpayment.ReservationId;
+                    WMS wms = new WMS();
+                    List<SplitPayResponse> SplitPayResponseList = new List<SplitPayResponse>();
+                    SplitPayResponse SplitPayforCatch = new SplitPayResponse();
+                    foreach (var card in guestpayment.paymentInfo)
+                    {
+                        SplitPayResponse SplitPayResponse = new SplitPayResponse();
+                        try
+                        {
+                            #region Create Address
+                            Address newAddress = new Address();
+                            newAddress.Street = string.IsNullOrEmpty(card.BillingStreet1) ? "" : card.BillingStreet1;
+                            newAddress.Street2 = string.IsNullOrEmpty(card.BillingStreet2) ? "" : card.BillingStreet2;
+                            newAddress.Unit = string.Empty;
+                            newAddress.City = string.IsNullOrEmpty(card.BillingCity) ? "" : card.BillingCity;
+                            newAddress.State = string.IsNullOrEmpty(card.BillingState) ? "" : card.BillingState;
+                            newAddress.Zip = string.IsNullOrEmpty(card.BillingZip) ? "" : card.BillingZip;
+                            newAddress.Country = string.IsNullOrEmpty(card.BillingCountry) ? "" : card.BillingCountry;
+                            wms.Addresses.InsertOnSubmit(newAddress);
+                            wms.SubmitChanges();
+                            #endregion
+                            #region Create Customer
+                            SalesOrder so = new SalesOrder();
+                            Customer customer = new Customer();
+                            var guestDetailInCustomer = wms.Customers.Where(x => x.Email == card.Email).FirstOrDefault();
+                            if (guestDetailInCustomer == null)
+                            {
+                                customer.BrideNameFirst = string.Empty;
+                                customer.BrideNameLast = string.Empty;
+                                customer.GroomNameFirst = card.CardName.Split(' ')[0];
+                                customer.GroomNameLast = card.CardName.Split(' ')[1];
+                                customer.Email = card.Email;
+                                customer.BillingAddress = newAddress;
+                                customer.CompanyID = 3;
+                                customer.CustomerType = 2;
+                                customer.BillingAddressID = newAddress.AddressID;
+                                customer.ShippingAddressID = newAddress.AddressID;
+                                customer.DayPhone = (string.IsNullOrEmpty(card.PhoneNo) ? string.Empty : card.PhoneNo);
+                                customer.EvePhone = (string.IsNullOrEmpty(card.PhoneNo) ? string.Empty : card.PhoneNo);
+                                customer.Fax = string.Empty;
+                                customer.IsEmailOptedOut = false;
+                                customer.ReferralID = 0;
+                                customer.AffiliateID = 0;
+                                customer.AuthUserID = 0;
+                                customer.IsRenewal = false;
+                                wms.Customers.InsertOnSubmit(customer);
+                                wms.SubmitChanges();
+                                so.CustomerID = customer.CustomerID;
+                            }
+                            else
+                            {
+                                so.CustomerID = guestDetailInCustomer.CustomerID;
+                            }
+                            #endregion
+                            #region Create Linked Sales Order
+                            var Reservation = hdc.Reservations.Where(c => c.ReservationId == guestpayment.ReservationId && (c.Status == "ON HOLD" || c.Status == "CONFIRMED") && c.Deleted == false).FirstOrDefault();
+                            if (Reservation == null)
+                            {
+                                return Request.CreateResponse(HttpStatusCode.BadRequest, "Reservation is not in confirmed or on hold status or deleted is true.");
+                            }
+                            so.PlanID = Reservation.Contract.EventDetail.Planid;
+                            so.OrderDate = DateTime.Now;
+                            so.CreateDate = DateTime.Now;
+                            so.CompanyID = 3;
+                            so.CreateID = 0;
+                            so.TotalPrice = card.TotalPrice;
+                            wms.SalesOrders.InsertOnSubmit(so);
+                            wms.SubmitChanges();
+                            SplitPayforCatch.SalesOrderID = so.SalesOrderID;
+                            #endregion
+                            SplitReservation splitreservation = new SplitReservation();
+                            splitreservation.CreatedDate = DateTime.Now;
+                            splitreservation.Deleted = false;
+                            splitreservation.CompanyId = 3;
+                            splitreservation.LinkedSalesOrderId = Convert.ToInt32(so.SalesOrderID);
+                            splitreservation.ReservationId = Reservation.ReservationId;
+                            splitreservation.RoombookedId = Reservation.ReservedRooms[0].RoomBookedId;
+                            splitreservation.GuestId = guestpayment.GuestID;
+                            splitreservation.TotalPrice = so.TotalPrice;
+                            splitreservation.CreatedBy = "Website";
+                            splitreservation.CreatedDate = DateTime.Now;
+                            hdc.SplitReservations.InsertOnSubmit(splitreservation);
+                            hdc.SubmitChanges();
+                            #region Take payment
+                            string CardAddress = (card.BillingZip + " " + card.BillingStreet1 + " " + card.BillingStreet2 + " " + card.BillingCity + " " + card.BillingState + " " + card.BillingCountry).ToString();
+                            Payment newPayment = new Payment();
+                            if (guestDetailInCustomer == null)
+                            {
+                                newPayment.Payee = customer.GroomNameFirst + " " + customer.GroomNameLast;
+                            }
+                            else
+                            {
+                                newPayment.Payee = guestDetailInCustomer.FullName;
+                            }
+                            newPayment.PaymentStatus = PaymentStatus.Pending;
+                            newPayment.Reference = "";
+                            newPayment.CompanyID = 3;
+                            newPayment.CardZip = card.CVV;//Cvv
+                            newPayment.CardNumber = card.CardNumber;//CardNumber
+                            newPayment.Location = 10;
+                            SplitPayforCatch.CardName = card.CardName;
+                            newPayment.CardName = card.CardName;//CardName
+                            newPayment.CardNumberMasked = GetMaskedCardNumber(card.CardNumber);
+                            newPayment.CardMo = card.CardMo;
+                            newPayment.CardYr = card.CardYr;
+                            newPayment.CardCVV2 = "";
+                            newPayment.PayDate = System.DateTime.Now;
+                            newPayment.Description = card.DescriptionInfo;
+                            newPayment.WeddingPlanID = so.PlanID;
+                            newPayment.SalesOrderID = so.SalesOrderID;
+                            newPayment.CardAddress = CardAddress;
+                            newPayment.setFee(Convert.ToDateTime(Reservation.Contract.CreatedDate), newPayment.CompanyID);
+                            newPayment.BaseAmount = card.Amount;
+                            newPayment.Fee = newPayment.GenerateFee(newPayment.BaseAmount);
+                            newPayment.Amount = newPayment.BaseAmount + newPayment.Fee;
+                            newPayment.PayType = card.PayType;
+                            newPayment.Notes = card.PaymentType;
+                            string storeCardMessage;
+                            bool tokenSuccess = Payment.GetToken(newPayment.CardNumber, newPayment.CardMo.ToString(), newPayment.CardYr.ToString(), out storeCardMessage, newPayment.CompanyID);
+                            if (tokenSuccess)
+                            {
+                                var paymentSuccess = newPayment.Process();
+                                if (paymentSuccess)
+                                {
+                                    newPayment.PaymentStatus = PaymentStatus.Approved;
+                                    if (Reservation.Status != "CONFIRMED")
+                                    {
+                                        var Reserve = hdc.Reservations.Where(c => c.ReservationId == Reservation.ReservationId && (c.Status == "ON HOLD" || c.Status == "CONFIRMED") && c.Deleted == false).FirstOrDefault();
+                                        Reserve.Status = "CONFIRMED";
+                                        wms.SubmitChanges();
+                                    }
+                                    string lastfour;
+                                    lastfour = card.CardNumber.Substring(card.CardNumber.Length - 4, 4);
+                                    LittleChapel.PaymentCard paymentCard = wms.PaymentCards.Where(c => c.CustomerID == so.CustomerID && c.Token == newPayment.Token).FirstOrDefault();
+                                    if (paymentCard == null)
+                                    {
+                                        paymentCard = new LittleChapel.PaymentCard();
+                                        paymentCard.CustomerID = Convert.ToInt32(so.CustomerID);
+                                        paymentCard.ExpMo = card.CardMo;
+                                        paymentCard.ExpYr = card.CardYr;
+                                        paymentCard.LastFour = lastfour;
+                                        paymentCard.PayType = card.PayType;
+                                        paymentCard.Zip = card.BillingZip;
+                                        paymentCard.Token = newPayment.Token;
+                                        wms.PaymentCards.InsertOnSubmit(paymentCard);
+                                        wms.SubmitChanges();
+                                    }
+                                    wms.Payments.InsertOnSubmit(newPayment);
+                                    wms.SubmitChanges();
+                                    SplitPayforCatch.PaymentID = newPayment.PaymentID;
+                                    var EventDateTime = hdc.EventDetails.Where(X => X.EventID == Reservation.Contract.EventID && (X.Deleted == false || X.Deleted == null)).FirstOrDefault();
+                                    DateTime dateTime = Convert.ToDateTime(EventDateTime.PaymentDueDate);
+                                    if (so.TotalPrice > so.TotalPaid)
+                                    {
+                                        paymentSchedule = PaymentSchedule(Convert.ToInt32(so.SalesOrderID), dateTime, paymentCard.Token, paymentCard.PaymentCardID);
+                                        if (!paymentSchedule.IsSuccessStatusCode)
+                                        {
+                                            SplitPayResponse.Error = "Problem occurred trying to schedule Payment";
+                                        }
+                                    }
+                                    try
+                                    {
+                                        //EmailUtilities eu = new EmailUtilities();
+                                        //eu.CreatePaymentReciept(so.SalesOrderID, , card.Email);
+                                    }
+                                    catch (Exception)
+                                    {
+
+                                    }
+                                    SplitPayResponse.CardName = newPayment.CardName;
+                                    SplitPayResponse.PaymentID = newPayment.PaymentID;
+                                    SplitPayResponse.SalesOrderID = so.SalesOrderID;
+                                    SplitPayResponseList.Add(SplitPayResponse);
+                                }
+                                else
+                                {
+                                    #region Charge Card Fail
+                                    newPayment.PaymentStatus = PaymentStatus.Declined;
+                                    string error;
+                                    error = newPayment.Result.ErrorMessage;
+                                    if (error.Length < 100)
+                                    {
+                                        newPayment.Reference = error;
+                                    }
+                                    else
+                                    {
+                                        newPayment.Reference = error.Substring(0, 99);
+                                    }
+                                    wms.Payments.InsertOnSubmit(newPayment);
+                                    wms.SubmitChanges();
+                                    #endregion
+                                    SplitPayforCatch.PaymentID = newPayment.PaymentID;
+                                    SplitPayResponse.CardName = newPayment.CardName;
+                                    SplitPayResponse.PaymentID = newPayment.PaymentID;
+                                    SplitPayResponse.SalesOrderID = so.SalesOrderID;
+                                    SplitPayResponse.Error = error;
+                                    SplitPayResponseList.Add(SplitPayResponse);
+                                }
+                            }
+                            #endregion
+                        }
+                        catch (Exception ex)
+                        {
+                            SplitPayforCatch.Error = ex.Message;
+                            SplitPayResponseList.Add(SplitPayforCatch);
+                        }
+                    }
+                    return Request.CreateResponse(HttpStatusCode.OK, SplitPayResponseList);
+                }
+                else
+                {
+                    return ValidationResponse;
+                }
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
             }
         }
 
 
+        private Customer GetOrCreateCustomerForOwner(GuestAccount guestAccount, Models.GuestPayment guestpayment)
+        {
+            // get customer from wms.customer table based on guestAccount email
+            LittleChapel.Customer customer = wms.Customers.Where(x => x.Email == guestAccount.Email).FirstOrDefault();
+
+            // Create new customer if customer does not exsit. This means first payment for this
+            // particular customer. This customer is the owner of the reservation
+            if (customer == null)
+            {
+                Log4net.Info("Entered Customer Scope");
+                Customer customerNew = new Customer();
+                customerNew.BrideNameFirst = string.Empty;
+                customerNew.BrideNameLast = string.Empty;
+                customerNew.GroomNameFirst = guestAccount.FirstName;
+                customerNew.GroomNameLast = guestAccount.LastName;
+                customerNew.CompanyID = guestAccount.CompanyId;
+                customerNew.CustomerType = 2;
+
+                //Add Address
+                Address newAddress = new Address();
+                newAddress.Street = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingStreet1) ? "" : guestpayment.paymentInfo.BillingStreet1;
+                newAddress.Street2 = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingStreet2) ? "" : guestpayment.paymentInfo.BillingStreet2;
+                newAddress.Unit = string.Empty;
+                newAddress.City = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCity) ? "" : guestpayment.paymentInfo.BillingCity;
+                newAddress.State = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingState) ? "" : guestpayment.paymentInfo.BillingState;
+                newAddress.Zip = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingZip) ? "" : guestpayment.paymentInfo.BillingZip;
+                newAddress.Country = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCountry) ? "" : guestpayment.paymentInfo.BillingCountry;
+                wms.Addresses.InsertOnSubmit(newAddress);
+                wms.SubmitChanges();
+                customerNew.BillingAddressID = newAddress.AddressID;
+                customerNew.ShippingAddressID = newAddress.AddressID;
+                customerNew.DayPhone = (string.IsNullOrEmpty(guestAccount.PhoneNo) ? string.Empty : guestAccount.PhoneNo);
+                customerNew.EvePhone = (string.IsNullOrEmpty(guestAccount.PhoneNo) ? string.Empty : guestAccount.PhoneNo);
+                customerNew.Fax = string.Empty;
+                customerNew.IsEmailOptedOut = false;
+                customerNew.ReferralID = 0;
+                customerNew.AffiliateID = 0;
+                customerNew.AuthUserID = 0;
+                customerNew.IsRenewal = false;
+                if (guestAccount.Email != "")
+                {
+                    customerNew.Email = guestAccount.Email;
+                }
+                wms.Customers.InsertOnSubmit(customerNew);
+                wms.SubmitChanges();
+                guestpayment.paymentInfo.Payee = guestAccount.FirstName + " " + guestAccount.LastName;
+                guestpayment.paymentInfo.CustomerID = customerNew.CustomerID;
+                return customerNew;
+            }
+            else
+            {
+                guestpayment.paymentInfo.Payee = customer.GroomNameFirst;
+                guestpayment.paymentInfo.CustomerID = customer.CustomerID;
+
+                return customer;
+            }
+
+        }
+
+        internal Customer GetOrCreateCustomerForOccupant(LittleChapel.GuestDetail occupant, Models.GuestPayment guestpayment)
+        {
+            // Check if occupant is in customer table. This would mean that occupant has
+            // paid in past
+            var guestDetailInCustomer = wms.Customers.Where(x => x.Email == occupant.Email).FirstOrDefault();
+
+            // if customer is not present, create customer
+            if (guestDetailInCustomer == null)
+            {
+                Log4net.Info("Entered Customer Scope");
+                Customer customerNew = new Customer();
+                customerNew.BrideNameFirst = string.Empty;
+                customerNew.BrideNameLast = string.Empty;
+                customerNew.GroomNameFirst = occupant.FirstName;
+                customerNew.GroomNameLast = occupant.LastName;
+                customerNew.CompanyID = occupant.CompanyId;
+                customerNew.CustomerType = 2;
+
+                //Add Address
+                Address newAddress = new Address();
+                newAddress.Street = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingStreet1) ? "" : guestpayment.paymentInfo.BillingStreet1;
+                newAddress.Street2 = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingStreet2) ? "" : guestpayment.paymentInfo.BillingStreet2;
+                newAddress.Unit = string.Empty;
+                newAddress.City = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCity) ? "" : guestpayment.paymentInfo.BillingCity;
+                newAddress.State = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingState) ? "" : guestpayment.paymentInfo.BillingState;
+                newAddress.Zip = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingZip) ? "" : guestpayment.paymentInfo.BillingZip;
+                newAddress.Country = string.IsNullOrEmpty(guestpayment.paymentInfo.BillingCountry) ? "" : guestpayment.paymentInfo.BillingCountry;
+                wms.Addresses.InsertOnSubmit(newAddress);
+                wms.SubmitChanges();
+                customerNew.BillingAddressID = newAddress.AddressID;
+                customerNew.ShippingAddressID = newAddress.AddressID;
+                customerNew.DayPhone = (string.IsNullOrEmpty(occupant.PhoneNo) ? string.Empty : occupant.PhoneNo);
+                customerNew.EvePhone = (string.IsNullOrEmpty(occupant.PhoneNo) ? string.Empty : occupant.PhoneNo);
+                customerNew.Fax = string.Empty;
+                customerNew.IsEmailOptedOut = false;
+                customerNew.ReferralID = 0;
+                customerNew.AffiliateID = 0;
+                customerNew.AuthUserID = 0;
+                customerNew.IsRenewal = false;
+                if (occupant.Email != "")
+                {
+                    customerNew.Email = occupant.Email;
+                }
+                wms.Customers.InsertOnSubmit(customerNew);
+                wms.SubmitChanges();
+                guestpayment.paymentInfo.Payee = occupant.FirstName + " " + occupant.LastName;
+                guestpayment.paymentInfo.CustomerID = customerNew.CustomerID;
+                return customerNew;
+            }
+            else
+            {
+                guestpayment.paymentInfo.Payee = guestDetailInCustomer.GroomNameFirst;
+                guestpayment.paymentInfo.CustomerID = guestDetailInCustomer.CustomerID;
+                return guestDetailInCustomer;
+            }
+
+        }
+
 
         /// <summary>
-        /// Create schedule payments for the Link Sales order 
+        /// Create schedule payments for the Link Sales order
         /// </summary>
         /// <param name="SalesOrderID"> Link Sales Order ID</param>
         /// <param name="FinalPaymentDate"> Final Payment Due Date</param>
@@ -1150,7 +1635,6 @@ namespace HotelAPI.GB.Controllers
             {
                 DateTime startdate = DateTime.Now;
                 //PaymentCard storedCard;
-
                 //get salesorder
                 SalesOrder salesorder = wms.SalesOrders.Where(c => c.SalesOrderID == SalesOrderID).SingleOrDefault();
                 if (wms.Payments.Where(c => c.SalesOrderID == salesorder.SalesOrderID).Any())
@@ -1181,11 +1665,11 @@ namespace HotelAPI.GB.Controllers
                             {
                                 createPaymentSchedule(PaymentCardID, salesorder, dt);
                             }
+                            #endregion
                         }
-
                         Logging(Log4net);
                         return Request.CreateResponse(System.Net.HttpStatusCode.OK);
-                        #endregion
+
                         #endregion
 
                     }
@@ -1226,49 +1710,98 @@ namespace HotelAPI.GB.Controllers
             }
             try
             {
-                LittleChapel.GuestAccount guestAccount =
-
-                    hdc.GuestAccounts.Where(c => c.ContractId == loginModel.ContractId && c.Email == loginModel.EmailId && c.Deleted == false).FirstOrDefault();
-
                 GuestResult guestResult = new GuestResult();
-                if (guestAccount == null)
+                LittleChapel.GuestAccount guestAccount = null;
+
+                dynamic reservation;
+                LittleChapel.GuestDetail guestDetail = null;
+                int guestDetailId = 0;
+
+                // Get Contracts
+                var Contract = hdc.Contracts.Where(x => x.ContractId == loginModel.ContractId && x.Status == "Contracted" && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
+
+                // If no contracts exsits return bad request
+                if (Contract != null)
                 {
-                    //create guest
-                    LittleChapel.GuestAccount guest = new LittleChapel.GuestAccount();
-                    guest.ContractId = loginModel.ContractId;
-                    guest.SugarCRMId = loginModel.SugerGuestId;
-                    guest.CreatedDate = DateTime.Now;
-                    guest.CreatedBy = loginModel.CreatedBy;
-                    guest.CompanyId = loginModel.CompanyId;
-                    guest.Email = loginModel.EmailId;
-                    guest.FirstName = loginModel.FirstName;
-                    guest.LastName = loginModel.LastName;
-                    guest.Deleted = false;
-                    hdc.GuestAccounts.InsertOnSubmit(guest);
+                    var Contracts = hdc.Contracts.Where(x => x.EventID == Contract.EventID && x.Status == "Contracted" && (x.Deleted == false || x.Deleted == null)).ToList();
 
-                    hdc.SubmitChanges();
+                    // Check user in all contracts for the event
+                    for (int contracts = 0; contracts < Contracts.Count(); contracts++)
+                    {
+                        // Check if user has logged in as owner before
+                        guestAccount =
+                             hdc.GuestAccounts.
+                             Where(c => c.ContractId == Contracts[contracts].ContractId
+                             && c.Email == loginModel.EmailId
+                             && c.Deleted == false).FirstOrDefault();
 
-                    guestResult.GuestId = Convert.ToInt16(guest.GuestAccId);
-                    guestResult.IsBooked = false;
-                    guestResult.IsGuestHasAnyReservation = false;
+                        // If owner id is not found that can mean one of two things
+                        // 1. Its a new user
+                        // 2. Its a occupant of the reservation made by owner
+                        if (guestAccount == null)
+                        {
+                            guestDetail = hdc.GuestDetails.Where(c => c.Email == loginModel.EmailId
+                                            && (c.Deleted == false || c.Deleted == null)
+                                            && c.ContractId == Contracts[contracts].ContractId).FirstOrDefault();
+
+                            // occupant login
+                            if (guestDetail != null)
+                            {
+                                // get reservation owner detail
+                                guestDetailId = guestDetail.GuestId;
+                                guestAccount = hdc.GuestDetails.Where(c => c.GuestId == guestDetail.GuestId
+                                                && (c.Deleted == false || c.Deleted == null)
+                                                && c.ContractId == Contracts[contracts].ContractId).FirstOrDefault().GuestAccount;
+
+                            }
+                        }
+
+                        if (guestAccount != null)
+                        {
+                            reservation = hdc.Reservations.Where
+                                (x => x.CreatedBy == Convert.ToString(guestAccount.GuestAccId)
+                                    && x.Status == "CONFIRMED"
+                                    && x.Deleted == false).FirstOrDefault();
+
+                            if (reservation != null)
+                            {
+                                guestResult.GuestId = guestAccount.GuestAccId;
+                                guestResult.GuestDetailId = guestDetailId;
+
+                                guestResult.IsGuestHasAnyReservation = true;
+                                break;
+
+                            }
+                            else
+                            {
+                                guestResult.IsGuestHasAnyReservation = false;
+                                GetGuestResult(ref guestResult, guestAccount);
+                            }
+                        }
+                    }
+                    if (guestAccount == null)
+                    {
+                        //create guest
+                        LittleChapel.GuestAccount guest = new LittleChapel.GuestAccount();
+                        guest.ContractId = loginModel.ContractId;
+                        guest.SugarCRMId = loginModel.SugerGuestId;
+                        guest.CreatedDate = DateTime.Now;
+                        guest.CreatedBy = loginModel.CreatedBy;
+                        guest.CompanyId = loginModel.CompanyId;
+                        guest.Email = loginModel.EmailId;
+                        guest.FirstName = loginModel.FirstName;
+                        guest.LastName = loginModel.LastName;
+                        guest.Deleted = false;
+                        hdc.GuestAccounts.InsertOnSubmit(guest);
+                        hdc.SubmitChanges();
+                        guestResult.GuestId = Convert.ToInt16(guest.GuestAccId);
+                        guestResult.IsGuestHasAnyReservation = false;
+                    }
                     return Request.CreateResponse(HttpStatusCode.OK, guestResult);
                 }
                 else
                 {
-                    LittleChapel.Reservation reservation = hdc.Reservations.Where(x => x.Deleted == false && x.CreatedBy == Convert.ToString(guestAccount.GuestAccId)).FirstOrDefault();
-                    guestResult.GuestId = guestAccount.GuestAccId;
-                    guestResult.IsBooked = true;
-                    if (reservation != null)
-                    {
-                        guestResult.IsGuestHasAnyReservation = true;
-
-                    }
-
-                    else
-                    {
-                        guestResult.IsGuestHasAnyReservation = false;
-                    }
-                    return Request.CreateResponse(HttpStatusCode.OK, guestResult);
+                    return Request.CreateResponse(HttpStatusCode.BadRequest, "No such contract exsits");
                 }
             }
             catch (Exception ex)
@@ -1278,20 +1811,87 @@ namespace HotelAPI.GB.Controllers
             }
         }
         #endregion
-
+        /// <summary>
+        /// being used as common function in Authenticate method
+        /// </summary>
+        /// <param name="guestResult"></param>
+        /// <param name="guestAccount"></param>
+        public void GetGuestResult(ref GuestResult guestResult, LittleChapel.GuestAccount guestAccount)
+        {
+            guestResult.GuestId = guestAccount.GuestAccId;
+            guestResult.IsGuestHasAnyReservation = false;
+        }
 
         #region PaymentSchedule GuestID
         /// <summary>
-        /// Payment Schedule details based on salesorder 
+        /// Payment Schedule details based on salesorder
         /// </summary>
         /// <param name="GuestID">GuestID</param>
-        /// <param name="ContractID">ContractID</param>
+        /// <param name="EventID">ContractID</param>
         /// <returns>Payment Schedule and Past Payment details</returns>
         [HttpGet]
-        [Route("PaymentScheduleList/{GuestID}/{ContractID}")]
-        public HttpResponseMessage PaySchedule(int GuestID, int ContractID)
+        [Route("PaymentScheduleList/{GuestID}/{EventID}")]
+        public HttpResponseMessage PaySchedule(int GuestID, int EventID)
         {
-            var guest = hdc.GuestDetails.Where(c => c.GuestAccId == GuestID && c.ContractId == ContractID);
+            var Contractids = hdc.Contracts.Where(c => c.EventID == EventID && c.Status == "Contracted" && (c.Deleted == false || c.Deleted == null)).Select(x => new { x.ContractId }).ToList();
+            List<Salesorder> Salesorder = new List<Models.Salesorder>();
+            PaymentScheduleResponses paymentscheduleresponse = new PaymentScheduleResponses();
+            paymentscheduleresponse.contracts = new List<Models.Contracts>();
+            var GuestAccount = hdc.GuestAccounts.Where(x => x.GuestAccId == GuestID && x.Deleted == false).FirstOrDefault();
+            var ListOfGuestAccount = hdc.GuestAccounts.Where(x => x.Email == GuestAccount.Email && x.Deleted == false).ToList();
+            foreach (var contract in Contractids)
+            {
+                Models.Contracts contracts = new Contracts();
+                contracts.ContractID = contract.ContractId;
+                contracts.salesorder = new List<Models.Salesorder>();
+                for (int GuestAccIDs = 0; GuestAccIDs < ListOfGuestAccount.Count(); GuestAccIDs++)
+                {
+                    var Reservations = hdc.Reservations.Where(c => c.CreatedBy == ListOfGuestAccount[GuestAccIDs].GuestAccId.ToString() && c.ContractId == Convert.ToInt32(contract.ContractId) && c.Status == "CONFIRMED").ToList();
+
+
+                    Salesorder so;
+                    foreach (var reservation in Reservations)
+                    {
+                        if (reservation != null)
+                        {
+                            var SalesorderIDList = hdc.SplitReservations.Where(c => c.ReservationId == reservation.ReservationId && c.Deleted == false).Select(d => d.LinkedSalesOrderId).ToList();
+                            SalesorderIDList.Add(reservation.LinkedSalesOrderId);
+
+                            foreach (var linksalesorderID in SalesorderIDList)
+                            {
+                                so = new Salesorder();
+                                var linkedsalesorder = wms.SalesOrders.Where(c => c.SalesOrderID == Convert.ToInt32(linksalesorderID));
+                                var linkedsalesobj = linkedsalesorder.Select(c => new { c.TotalPrice, c.TotalPaid, c.PlanID, c.SalesOrderID, c.CreateDate, c.BalanceDue }).FirstOrDefault();
+                                so.PlanID = linkedsalesobj.PlanID;
+                                so.SalesOrderID = linkedsalesobj.SalesOrderID;
+                                so.BookedDate = linkedsalesobj.CreateDate;
+                                so.BalanceDue = linkedsalesobj.BalanceDue;
+                                var TotalRemaining = so.BalanceDue;
+                                var Paymentschedules = linkedsalesorder.SelectMany(c => c.PaymentSchedules);
+                                var EMI = Paymentschedules.Where(c => c.PaymentID == null).Count();
+                                LittleChapel.Payment newpayment = new LittleChapel.Payment();
+                                if (EMI > 0)
+                                {
+                                    so.CardName = Paymentschedules.FirstOrDefault().PaymentCard.Customer.GroomNameFirst + " " + Paymentschedules.FirstOrDefault().PaymentCard.Customer.GroomNameLast;
+                                    so.paymentschedule = Paymentschedules.Select(c => new Paymentschedule { Paymentdate = c.PaymentDate, Amount = Math.Round(TotalRemaining / EMI, 2), Paytype = "Scheduled Invoices", Status = c.PaymentID == null ? PaymentStatus.Pending : c.Payment.PaymentStatus, Fee = newpayment.GenerateFee(Math.Round(TotalRemaining / EMI, 2)), TotalAmount = Math.Round(TotalRemaining / EMI, 2) + newpayment.GenerateFee(Math.Round(TotalRemaining / EMI, 2)) }).ToList();
+                                    contracts.salesorder.Add(so);
+                                }
+                            }
+
+
+                        }
+                    }
+                }
+                paymentscheduleresponse.contracts.Add(contracts);
+            }
+            return Request.CreateResponse(HttpStatusCode.OK, paymentscheduleresponse);
+        }
+
+        [HttpGet]
+        [Route("PaymentScheduleEmailList/{GuestID}/{ContractID}")]
+        public HttpResponseMessage PayScheduleEmail(int GuestID, int ContractID)
+        {
+            var guest = hdc.GuestDetails.Where(c => c.GuestAccId == GuestID && c.ContractId == ContractID && (c.Deleted == false || c.Deleted == null));
             var reservation = guest.Select(c => c.Reservation).Distinct();
             var linkedsalesorderids = reservation.Select(c => c.LinkedSalesOrderId).ToList();
             PaymentScheduleResponse paymentscheduleresponse = new PaymentScheduleResponse();
@@ -1310,7 +1910,7 @@ namespace HotelAPI.GB.Controllers
                     so.BalanceDue = linkedsalesobj.BalanceDue;
                     var TotalRemaining = so.BalanceDue;
                     var Paymentschedules = linkedsalesorder.SelectMany(c => c.PaymentSchedules);
-                    var EMI = Paymentschedules.Count();
+                    var EMI = Paymentschedules.Where(c => c.PaymentID == null).Count();
                     LittleChapel.Payment newpayment = new LittleChapel.Payment();
                     if (EMI > 0)
                     {
@@ -1320,43 +1920,51 @@ namespace HotelAPI.GB.Controllers
                 }
             }
             paymentscheduleresponse.salesorder = Salesorder;
-            Logging(Log4net);
             return Request.CreateResponse(HttpStatusCode.OK, paymentscheduleresponse);
         }
+
+
         #endregion
 
 
         #region EMIDates
-        private List<DateTime> GetDatesBetween(DateTime startDate, DateTime endDate, int monthcount)
+        public List<DateTime> GetDatesBetween(DateTime startDate, DateTime endDate, int monthcount)
         {
             var dates = new List<DateTime>();
 
             if (monthcount > 6)
-            {
-                int interval = monthcount - 6;
-                for (var dt = startDate.AddMonths(1); dt <= endDate.AddMonths(-interval); dt = dt.AddMonths(1))
-                {
-                    dates.Add(dt);
-                }
-
-            }
-            else
             {
                 for (var dt = startDate.AddMonths(1); dt <= endDate; dt = dt.AddMonths(1))
                 {
                     dates.Add(dt);
                 }
             }
+            else if (startDate.AddMonths(1) < endDate)
+            {
+                for (var dt = startDate.AddMonths(1); dt <= endDate; dt = dt.AddMonths(1))
+                {
+                    dates.Add(dt);
+                }
+            }
+            else
+            {
+                dates.Add(endDate);
+            }
             return dates;
         }
         #endregion
+        /// <summary>
+        ///
+        /// </summary>
+        /// <param name="PaymentCardID"></param>
+        /// <returns></returns>
         [HttpPost]
         [Route("DeletePaymentCard/{PaymentCardID}")]
         public HttpResponseMessage DeletePaymentCard(int PaymentCardID)
         {
             try
             {
-                var paymentcard = wms.PaymentCards.Where(c => c.PaymentCardID == PaymentCardID).FirstOrDefault();
+                var paymentcard = wms.PaymentCards.Where(c => c.PaymentCardID == PaymentCardID && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
                 paymentcard.Deleted = true;
                 wms.SubmitChanges();
                 return Request.CreateResponse(HttpStatusCode.OK);
@@ -1368,7 +1976,7 @@ namespace HotelAPI.GB.Controllers
         }
 
         #region Create Payment Schedule
-        private void createPaymentSchedule(int PaymentCardID, SalesOrder so, DateTime FinalPaymentDate)
+        public void createPaymentSchedule(int PaymentCardID, SalesOrder so, DateTime FinalPaymentDate)
         {
             #region PaymentSchedule
 
@@ -1405,7 +2013,7 @@ namespace HotelAPI.GB.Controllers
             PaymentCard storedCard;
 
             //Get the card.  Look in PaymentCard first.  If not there, then it came from an admin payment.
-            storedCard = wms.PaymentCards.SingleOrDefault(c => c.Token == Token && c.CustomerID == so.CustomerID.Value);
+            storedCard = wms.PaymentCards.SingleOrDefault(c => c.Token == Token && c.CustomerID == so.CustomerID.Value && (c.Deleted == false || c.Deleted == null));
 
             if (storedCard == null)
             {
@@ -1436,6 +2044,7 @@ namespace HotelAPI.GB.Controllers
         #endregion
 
 
+
         private string GetMaskedCardNumber(string CardNumber)
         {
             try
@@ -1457,39 +2066,63 @@ namespace HotelAPI.GB.Controllers
         /// <param name="GuestID"></param>
         /// <returns></returns>
         [HttpGet]
-        [Route("PaymentCardDetails/{GuestID}")]
-        public HttpResponseMessage PaymentcardDetails(int GuestID)
+        [Route("PaymentCardDetails/{GuestID}/{guestDetailId}")]
+        public HttpResponseMessage PaymentcardDetails(int GuestID, int guestDetailId = 0)
         {
             try
             {
                 PaymentCardResponse paymentcardresponse = new PaymentCardResponse();
-                var guest = hdc.GuestDetails.Where(c => c.GuestAccId == GuestID);
-                var reservation = guest.Select(c => c.Reservation).Distinct();
-                var linkedsalesorderids = reservation.Select(c => c.LinkedSalesOrderId).ToList();
-                List<PaymentCardDetails> paymentcarddetails = new List<PaymentCardDetails>();
-                PaymentCardDetails pc;
-
-                foreach (var l in linkedsalesorderids)
+                var GuestAccount = hdc.GuestAccounts.Where(x => x.GuestAccId == GuestID && x.Deleted == false).FirstOrDefault();
+                if (GuestAccount != null)
                 {
-                    var payments = wms.Payments.Where(c => c.SalesOrderID == l).Select(x => new { x.Token }).Distinct().ToList();
-                    string cardname = wms.Payments.Where(c => c.SalesOrderID == l).Select(c => c.CardName).FirstOrDefault();
-                    int Paytype = wms.Payments.Where(c => c.SalesOrderID == l).Select(c => c.PayType).FirstOrDefault();
-                    foreach (var p in payments)
+                    var contract = hdc.Contracts.Where(x => x.EventID == GuestAccount.Contract.EventID).ToList();
+                    List<PaymentCardDetails> paymentcarddetails = new List<PaymentCardDetails>();
+                    for (int Contract = 0; Contract < contract.Count(); Contract++)
                     {
-                        var paymentcard = wms.PaymentCards.Where(c => c.Token == p.Token && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
-                        pc = new PaymentCardDetails();
-                        pc.PayType = Paytype;
-                        pc.CardName = cardname;
-                        pc.Digits = paymentcard.LastFour;
-                        pc.PaymentCardID = paymentcard.PaymentCardID;
-                        //pc.Token = paymentcard.Token;
-                        paymentcarddetails.Add(pc);
+                        var GuestAccounts = hdc.GuestAccounts.Where(x => x.Email == GuestAccount.Email && x.Deleted == false).ToList();
+                        for (int GuestAccIDs = 0; GuestAccIDs < GuestAccounts.Count(); GuestAccIDs++)
+                        {
+                            var linkedsalesorderids = hdc.Reservations.Where(x => x.ContractId == contract[Contract].ContractId && x.CreatedBy == GuestAccounts[GuestAccIDs].GuestAccId.ToString()).Select(c => c.LinkedSalesOrderId).ToList();
+                            PaymentCardDetails pc;
+                            foreach (var linkedsalesorder in linkedsalesorderids)
+                            {
+                                if (linkedsalesorder != null)
+                                {
+                                    var payment = wms.Payments.Where(x => x.SalesOrderID == linkedsalesorder.Value).FirstOrDefault();
+                                    if (payment != null)
+                                    {
+                                        var salesOrder = wms.SalesOrders.Where(x => x.SalesOrderID == linkedsalesorder.Value).FirstOrDefault();
 
+                                        PaymentCard paymentCard = null;
+
+                                        if (guestDetailId == 0)
+                                        {
+                                            paymentCard = wms.PaymentCards.Where(c => c.Token == payment.Token && c.CustomerID == salesOrder.CustomerID && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
+
+                                        }
+                                        else
+                                        {
+                                            string guestEmail = hdc.GuestDetails.Where(c => c.GuestId == guestDetailId).FirstOrDefault().Email;
+                                            int customerid = wms.Customers.Where(x => x.Email == guestEmail).FirstOrDefault().CustomerID;
+                                            paymentCard = wms.PaymentCards.Where(c => c.Token == payment.Token && c.CustomerID == customerid && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
+                                        }
+
+                                        if (paymentCard != null)
+                                        {
+                                            pc = new PaymentCardDetails();
+                                            pc.PayType = payment.PayType;
+                                            pc.CardName = payment.CardName;
+                                            pc.Digits = paymentCard.LastFour;
+                                            pc.PaymentCardID = paymentCard.PaymentCardID;
+                                            paymentcarddetails.Add(pc);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                    paymentcardresponse.paymentcarddetails = paymentcarddetails.DistinctBy(c => c.PaymentCardID).ToList();
                 }
-                paymentcarddetails = paymentcarddetails.DistinctBy(c => c.PaymentCardID).ToList();
-                paymentcardresponse.paymentcarddetails = paymentcarddetails;
-                Logging(Log4net);
                 return Request.CreateResponse(HttpStatusCode.OK, paymentcardresponse);
             }
             catch (Exception ex)
@@ -1663,17 +2296,13 @@ namespace HotelAPI.GB.Controllers
                         //guestResult.IsGuestHasAnyReservation = false;
                         //return Request.CreateResponse(HttpStatusCode.OK, guestResult);
                     }
-
-
                 }
-
                 catch (Exception ex)
                 {
                     CatchMessage(ex);
                     return Request.CreateResponse(HttpStatusCode.InternalServerError);
                 }
             }
-
             return Request.CreateResponse(HttpStatusCode.OK);
         }
 
@@ -1762,5 +2391,7 @@ namespace HotelAPI.GB.Controllers
 
     }
 }
+
+
 
 
