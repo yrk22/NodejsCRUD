@@ -48,3 +48,37 @@ SECOND POINT
             return Request.CreateResponse(HttpStatusCode.OK, "Payment Schedules successfully changed to selected card."); ;
         }
         ------------------------------------
+FIRST POINT
+[HttpPost]
+        [Route("DeletePaymentCard/{PaymentCardID}")]
+        public HttpResponseMessage DeletePaymentCard(int PaymentCardID, int NewPaymentCardID = 0)
+        {
+            try
+            {
+                IQueryable<LittleChapel.PaymentCard> card = wms.PaymentCards;
+                var paymentcard = wms.PaymentCards.Where(c => c.PaymentCardID == PaymentCardID && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
+                var paymentcardsofsingleCustomer = card.Where(c => c.CustomerID == paymentcard.CustomerID && (c.Deleted == false || c.Deleted == null)).ToList();
+                List<Models.PaymentCard> paymentcards = null;
+                if (NewPaymentCardID == 0)
+                {
+                    for (int intI = 0; intI < paymentcardsofsingleCustomer.Count(); intI++)
+                    {
+                        paymentcards = new List<Models.PaymentCard>();
+                        Models.PaymentCard paycard = new Models.PaymentCard();
+                        paycard.CardNumber = paymentcardsofsingleCustomer[intI].LastFour;
+                        paycard.PaymentCardID = paymentcardsofsingleCustomer[intI].PaymentCardID;
+                        paymentcards.Add(paycard);
+                    }
+                }
+                if (paymentcards != null && paymentcards.Count() > 0)
+                {
+                    return Request.CreateResponse(HttpStatusCode.OK, paymentcards);
+                }
+                //wms.SubmitChanges();
+                return Request.CreateResponse(HttpStatusCode.OK);
+            }
+            catch (Exception ex)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+        }
