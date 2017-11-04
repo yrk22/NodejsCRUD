@@ -1,0 +1,50 @@
+SECOND POINT
+-------------------------
+[HttpPost]
+        public HttpResponseMessage UpdateCardSchedule(int? SalesOrderID, string Token)
+        {
+            PaymentSchedule[] schedules;
+            PaymentCard storedCard;
+            SalesOrder so;
+            if (SalesOrderID.HasValue)
+            {
+                so = wms.SalesOrders.Single(c => c.SalesOrderID == SalesOrderID.Value);
+                storedCard = GetPaymentCard(Token, so);
+                schedules = wms.PaymentSchedules.Where(c => c.SalesOrderID == SalesOrderID.Value && c.Payment == null).ToArray();
+            }
+            else
+            {
+                return Request.CreateResponse(HttpStatusCode.BadRequest,"SalesOrderID is missing.");
+            }
+
+            if (schedules.Count() == 0)
+            {
+                return Request.CreateResponse(HttpStatusCode.BadRequest, "There are no scheduled payments to update.");
+            }
+
+            if (storedCard == null)
+            {
+                return Request.CreateResponse(HttpStatusCode.BadRequest, "Could not find credit card."); 
+            }
+
+            foreach (var payment in schedules)
+            {
+                payment.PaymentCardID = storedCard.PaymentCardID;
+            }
+            var reservation = hdc.Reservations.Where(x => x.LinkedSalesOrderId == SalesOrderID && x.Deleted == false).FirstOrDefault();
+            wms.Notes.InsertOnSubmit(new Note
+            {
+                NoteDate = DateTime.Now,
+                IsActive = true,
+                EmployeeID = Employee.CurrentEmployee.EmployeeID,
+                PlanID = reservation.Contract.EventDetail.Planid,
+                IsFrozen = false,
+                IsReminder = false,
+                Notes = "Updated payment plan to card ending: " + storedCard.LastFour,
+                SalesOrderID = SalesOrderID
+            });
+
+            wms.SubmitChanges();
+            return Request.CreateResponse(HttpStatusCode.OK, "Payment Schedules successfully changed to selected card."); ;
+        }
+        ------------------------------------
