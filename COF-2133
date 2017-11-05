@@ -1,3 +1,8 @@
+use wms
+select * from [PaymentCard] where PaymentCardID=11154
+select * from [PaymentCard] where CustomerID=194482
+select * from SalesOrder where CustomerID=194482
+select * from PaymentSchedule where salesorderID=153759
 SECOND POINT
 -------------------------
 [HttpPost]
