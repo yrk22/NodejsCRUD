@@ -49,36 +49,84 @@ SECOND POINT
         }
         ------------------------------------
 FIRST POINT
-[HttpPost]
-        [Route("DeletePaymentCard/{PaymentCardID}")]
+/// <summary>
+        /// 
+        /// </summary>
+        /// <param name="PaymentCardID"></param>
+        /// <returns></returns>
+        [HttpPost]
+        [Route("DeletePaymentCard/{PaymentCardID}/{NewPaymentCardID}")]
         public HttpResponseMessage DeletePaymentCard(int PaymentCardID, int NewPaymentCardID = 0)
         {
             try
             {
-                IQueryable<LittleChapel.PaymentCard> card = wms.PaymentCards;
-                var paymentcard = wms.PaymentCards.Where(c => c.PaymentCardID == PaymentCardID && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
-                var paymentcardsofsingleCustomer = card.Where(c => c.CustomerID == paymentcard.CustomerID && (c.Deleted == false || c.Deleted == null)).ToList();
-                List<Models.PaymentCard> paymentcards = null;
-                if (NewPaymentCardID == 0)
+                HttpResponseMessage httpresponse = DeleteCardPer(PaymentCardID);
+                if (httpresponse.StatusCode == HttpStatusCode.NoContent || (!httpresponse.IsSuccessStatusCode && httpresponse.StatusCode != HttpStatusCode.BadRequest))
                 {
-                    for (int intI = 0; intI < paymentcardsofsingleCustomer.Count(); intI++)
+                    IQueryable<LittleChapel.PaymentCard> card = wms.PaymentCards;
+                    var paymentcard = card.Where(c => c.PaymentCardID == PaymentCardID && (c.Deleted == false || c.Deleted == null)).FirstOrDefault();
+                    var paymentcardsofsingleCustomer = card.Where(c => c.CustomerID == paymentcard.CustomerID && (c.Deleted == false || c.Deleted == null)).ToList();
+                    List<Models.PaymentCard> paymentcards = null;
+                    if (NewPaymentCardID == 0)
                     {
                         paymentcards = new List<Models.PaymentCard>();
-                        Models.PaymentCard paycard = new Models.PaymentCard();
-                        paycard.CardNumber = paymentcardsofsingleCustomer[intI].LastFour;
-                        paycard.PaymentCardID = paymentcardsofsingleCustomer[intI].PaymentCardID;
-                        paymentcards.Add(paycard);
+                        for (int intI = 0; intI < paymentcardsofsingleCustomer.Count(); intI++)
+                        {
+                            Models.PaymentCard paycard = new Models.PaymentCard();
+                            paycard.CardNumber = paymentcardsofsingleCustomer[intI].LastFour;
+                            paycard.PaymentCardID = paymentcardsofsingleCustomer[intI].PaymentCardID;
+                            paymentcards.Add(paycard);
+                        }
                     }
+                    if (paymentcards != null && paymentcards.Count() > 0)
+                    {
+                        return Request.CreateResponse(HttpStatusCode.OK, paymentcards);
+                    }
+                    var salesorders = paymentcard.Customer.SalesOrders.ToList();
+                    for (int intI = 0; intI < salesorders.Count(); intI++)
+                    {
+                        var PaymentSchedules = wms.PaymentSchedules.Where(x => x.SalesOrderID == salesorders[intI].SalesOrderID && x.PaymentCardID == PaymentCardID).ToList();
+                        if (PaymentSchedules.Count > 0)
+                        {
+                            var newPaymentcard = wms.PaymentCards.Where(x => x.PaymentCardID == NewPaymentCardID).FirstOrDefault();
+                            UpdateCardSchedule(salesorders[intI].SalesOrderID, newPaymentcard.Token, PaymentCardID);
+                        }
+                    }
+                    return Request.CreateResponse(HttpStatusCode.OK);
                 }
-                if (paymentcards != null && paymentcards.Count() > 0)
+                else
                 {
-                    return Request.CreateResponse(HttpStatusCode.OK, paymentcards);
+                    return httpresponse;
                 }
-                //wms.SubmitChanges();
-                return Request.CreateResponse(HttpStatusCode.OK);
             }
             catch (Exception ex)
             {
                 return Request.CreateResponse(HttpStatusCode.InternalServerError, ex.Message);
+            }
+        }
+        public HttpResponseMessage DeleteCardPer(int PaymentCardID)
+        {
+            try
+            {
+                var paymentSchedules = wms.PaymentSchedules.Where(x => x.PaymentCardID == PaymentCardID).ToList();
+                var paymentcard = wms.PaymentCards.Where(x => x.PaymentCardID == PaymentCardID && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
+                if (paymentcard != null && paymentSchedules.Count() == 0)
+                {
+                    paymentcard.Deleted = true;
+                    wms.SubmitChanges();
+                }
+                else if (paymentcard == null)
+                {
+                    return Request.CreateResponse(HttpStatusCode.BadRequest, "Payment card is already deleted or not found.");
+                }
+                else if (paymentSchedules.Count > 0 && paymentcard != null)
+                {
+                    return Request.CreateResponse(HttpStatusCode.NoContent);
+                }
+                return Request.CreateResponse(HttpStatusCode.OK, "Payment card deleted.");
+            }
+            catch (Exception)
+            {
+                return Request.CreateResponse(HttpStatusCode.InternalServerError, "problem occurred trying to delete card.");
             }
         }
