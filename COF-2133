@@ -48,6 +48,7 @@ SECOND POINT
             return Request.CreateResponse(HttpStatusCode.OK, "Payment Schedules successfully changed to selected card."); ;
         }
         ------------------------------------
+        http://localhost:64304/api/GB/DeletePaymentCard/11154/12386
 FIRST POINT
 /// <summary>
         /// 
