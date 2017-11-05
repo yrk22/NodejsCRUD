@@ -1,20 +1,20 @@
 SECOND POINT
 -------------------------
 [HttpPost]
-        public HttpResponseMessage UpdateCardSchedule(int? SalesOrderID, string Token)
+        public HttpResponseMessage UpdateCardSchedule(int? SalesOrderID, string Token, int OldPaymentCardID)
         {
             PaymentSchedule[] schedules;
-            PaymentCard storedCard;
+            LittleChapel.PaymentCard storedCard;
             SalesOrder so;
             if (SalesOrderID.HasValue)
             {
                 so = wms.SalesOrders.Single(c => c.SalesOrderID == SalesOrderID.Value);
                 storedCard = GetPaymentCard(Token, so);
-                schedules = wms.PaymentSchedules.Where(c => c.SalesOrderID == SalesOrderID.Value && c.Payment == null).ToArray();
+                schedules = wms.PaymentSchedules.Where(c => c.SalesOrderID == SalesOrderID.Value && c.PaymentCardID == OldPaymentCardID && c.Payment == null).ToArray();
             }
             else
             {
-                return Request.CreateResponse(HttpStatusCode.BadRequest,"SalesOrderID is missing.");
+                return Request.CreateResponse(HttpStatusCode.BadRequest, "SalesOrderID is missing.");
             }
 
             if (schedules.Count() == 0)
@@ -24,7 +24,7 @@ SECOND POINT
 
             if (storedCard == null)
             {
-                return Request.CreateResponse(HttpStatusCode.BadRequest, "Could not find credit card."); 
+                return Request.CreateResponse(HttpStatusCode.BadRequest, "Could not find credit card.");
             }
 
             foreach (var payment in schedules)
@@ -40,11 +40,11 @@ SECOND POINT
                 PlanID = reservation.Contract.EventDetail.Planid,
                 IsFrozen = false,
                 IsReminder = false,
-                Notes = "Updated payment plan to card ending: " + storedCard.LastFour,
+                Notes = "Updated payment salesorder to card ending: " + storedCard.LastFour,
                 SalesOrderID = SalesOrderID
             });
-
             wms.SubmitChanges();
+            DeleteCardPer(OldPaymentCardID);
             return Request.CreateResponse(HttpStatusCode.OK, "Payment Schedules successfully changed to selected card."); ;
         }
         ------------------------------------
