@@ -116,10 +116,15 @@ FIRST POINT
             {
                 var paymentSchedules = wms.PaymentSchedules.Where(x => x.PaymentCardID == PaymentCardID).ToList();
                 var paymentcard = wms.PaymentCards.Where(x => x.PaymentCardID == PaymentCardID && (x.Deleted == false || x.Deleted == null)).FirstOrDefault();
-                if (paymentcard != null && paymentSchedules.Count() == 0)
+                var paymentcardcustomer = wms.PaymentCards.Where(x => x.CustomerID == paymentcard.CustomerID).ToList();
+                if (paymentcard != null && paymentcardcustomer.Count() > 1 && paymentSchedules.Count() == 0)
                 {
                     paymentcard.Deleted = true;
                     wms.SubmitChanges();
+                }
+                else if (paymentcardcustomer.Count() <= 1)
+                {
+                    return Request.CreateResponse(HttpStatusCode.BadRequest, "You cannot delete the card on file without adding a new card..");
                 }
                 else if (paymentcard == null)
                 {
